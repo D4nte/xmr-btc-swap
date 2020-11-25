@@ -127,7 +127,7 @@ pub async fn simple_swap(
             s_a,
             v_a,
         } => {
-            let (channel, amounts, state3) =
+            let (channel, state3) =
                 negotiate(amounts, a, s_a, v_a, &mut swarm, bitcoin_wallet.clone()).await?;
 
             simple_swap(

@@ -1,7 +1,7 @@
 use crate::{
     alice::{amounts, OutEvent, Swarm},
     network::request_response::AliceToBob,
-    SwapAmounts, PUNISH_TIMELOCK, REFUND_TIMELOCK,
+    state, SwapAmounts, PUNISH_TIMELOCK, REFUND_TIMELOCK,
 };
 use anyhow::{bail, Result};
 use libp2p::request_response::ResponseChannel;
@@ -22,7 +22,7 @@ pub async fn negotiate(
     v_a: crate::monero::PrivateViewKey,
     swarm: &mut Swarm,
     bitcoin_wallet: Arc<crate::bitcoin::Wallet>,
-) -> Result<(ResponseChannel<AliceToBob>, SwapAmounts, State3)> {
+) -> Result<(ResponseChannel<AliceToBob>, State3)> {
     // Bob dials us
     match swarm.next().await {
         OutEvent::ConnectionEstablished(_bob_peer_id) => {}
@@ -44,6 +44,12 @@ pub async fn negotiate(
     }
     swarm.send_amounts(channel, amounts);
 
+    // Bob sends us message0
+    let message0 = match swarm.next().await {
+        OutEvent::Message0(msg) => msg,
+        other => bail!("Unexpected event received: {:?}", other),
+    };
+
     let SwapAmounts { btc, xmr } = amounts;
 
     let redeem_address = bitcoin_wallet.as_ref().new_address().await?;
@@ -61,34 +67,26 @@ pub async fn negotiate(
         punish_address,
     );
 
-    // Bob sends us message0
-    let message0 = match swarm.next().await {
-        OutEvent::Message0(msg) => msg,
-        other => bail!("Unexpected event received: {:?}", other),
-    };
-
     let state1 = state0.receive(message0)?;
 
-    let (state2, channel) = match swarm.next().await {
-        OutEvent::Message1 { msg, channel } => {
-            let state2 = state1.receive(msg);
-            (state2, channel)
-        }
+    let (msg, channel) = match swarm.next().await {
+        OutEvent::Message1 { msg, channel } => (msg, channel),
         other => bail!("Unexpected event: {:?}", other),
     };
+
+    let state2 = state1.receive(msg);
 
     let message1 = state2.next_message();
     swarm.send_message1(channel, message1);
 
-    let (state3, channel) = match swarm.next().await {
-        OutEvent::Message2 { msg, channel } => {
-            let state3 = state2.receive(msg)?;
-            (state3, channel)
-        }
+    let (msg, channel) = match swarm.next().await {
+        OutEvent::Message2 { msg, channel } => (msg, channel),
         other => bail!("Unexpected event: {:?}", other),
     };
 
-    Ok((channel, amounts, state3))
+    let state3 = state2.receive(msg)?;
+
+    Ok((channel, state3))
 }
 
 pub async fn lock_xmr(
